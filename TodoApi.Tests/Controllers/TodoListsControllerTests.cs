@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TodoApi.Controllers;
+using TodoApi.Data;
+using TodoApi.Dtos;
 using TodoApi.Models;
 
-namespace TodoApi.Tests;
+namespace TodoApi.Tests.Controllers;
 
 #nullable disable
 public class TodoListsControllerTests
@@ -65,7 +67,7 @@ public class TodoListsControllerTests
 
             var result = await controller.PutTodoList(
                 3,
-                new Dtos.UpdateTodoList { Name = "Task 3" }
+                new UpdateTodoList { Name = "Task 3" }
             );
 
             Assert.IsType<NotFoundResult>(result);
@@ -84,7 +86,7 @@ public class TodoListsControllerTests
             var todoList = await context.TodoList.Where(x => x.Id == 2).FirstAsync();
             var result = await controller.PutTodoList(
                 todoList.Id,
-                new Dtos.UpdateTodoList { Name = "Changed Task 2" }
+                new UpdateTodoList { Name = "Changed Task 2" }
             );
 
             Assert.IsType<OkObjectResult>(result);
@@ -100,9 +102,9 @@ public class TodoListsControllerTests
 
             var controller = new TodoListsController(context);
 
-            var result = await controller.PostTodoList(new Dtos.CreateTodoList { Name = "Task 3" });
+            var result = await controller.PostTodoList(new CreateTodoList { Name = "Task 3" });
 
-            Assert.IsType<CreatedAtActionResult>(result.Result);
+            Assert.IsType<OkObjectResult>(result.Result);
             Assert.Equal(3, context.TodoList.Count());
         }
     }

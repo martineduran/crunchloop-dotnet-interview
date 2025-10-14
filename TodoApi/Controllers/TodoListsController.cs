@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using TodoApi.Data;
 using TodoApi.Dtos;
 using TodoApi.Models;
 
@@ -24,7 +25,7 @@ namespace TodoApi.Controllers
         }
 
         // GET: api/todolists/5
-        [HttpGet("{id}")]
+        [HttpGet("{id:long}")]
         public async Task<ActionResult<TodoList>> GetTodoList(long id)
         {
             var todoList = await _context.TodoList.FindAsync(id);
@@ -39,7 +40,7 @@ namespace TodoApi.Controllers
 
         // PUT: api/todolists/5
         // To protect from over-posting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
-        [HttpPut("{id}")]
+        [HttpPut("{id:long}")]
         public async Task<ActionResult> PutTodoList(long id, UpdateTodoList payload)
         {
             var todoList = await _context.TodoList.FindAsync(id);
@@ -60,16 +61,16 @@ namespace TodoApi.Controllers
         [HttpPost]
         public async Task<ActionResult<TodoList>> PostTodoList(CreateTodoList payload)
         {
-            var todoList = new TodoList { Name = payload.Name };
+            var todoList = new TodoList { Name = payload.Name, TodoItems = [] };
 
             _context.TodoList.Add(todoList);
             await _context.SaveChangesAsync();
 
-            return CreatedAtAction("GetTodoList", new { id = todoList.Id }, todoList);
+            return Ok(new CreateTodoListResult(todoList.Id));
         }
 
         // DELETE: api/todolists/5
-        [HttpDelete("{id}")]
+        [HttpDelete("{id:long}")]
         public async Task<ActionResult> DeleteTodoList(long id)
         {
             var todoList = await _context.TodoList.FindAsync(id);

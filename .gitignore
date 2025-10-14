@@ -35,3 +35,12 @@ msbuild.wrn
 
 # Visual Studio 2015
 .vs/
+
+# Sensitive configuration files
+appsettings.Development.json
+appsettings.*.json
+!appsettings.json
+*.env
+.env
+.env.*
+secrets.json
