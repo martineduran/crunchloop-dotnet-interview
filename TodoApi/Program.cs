@@ -15,6 +15,18 @@ builder
 // SignalR
 builder.Services.AddSignalR();
 
+// Cors
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowFrontend", corsPolicyBuilder =>
+    {
+        corsPolicyBuilder.WithOrigins("http://localhost:5173")
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .AllowCredentials();
+    });
+});
+
 // Background job services
 builder.Services.AddSingleton<IBackgroundJobQueue, BackgroundJobQueue>();
 builder.Services.AddHostedService<BackgroundJobProcessor>();
@@ -25,6 +37,8 @@ builder.Logging.AddConsole();
 var app = builder.Build();
 
 app.UseMiddleware<GlobalErrorHandlingMiddleware>();
+
+app.UseCors("AllowFrontend");
 
 app.UseAuthorization();
 app.MapControllers();
