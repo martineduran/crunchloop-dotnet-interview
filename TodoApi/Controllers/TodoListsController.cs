@@ -22,9 +22,18 @@ namespace TodoApi.Controllers
 
         // GET: api/todolists
         [HttpGet]
-        public async Task<ActionResult<IList<TodoList>>> GetTodoLists()
+        public async Task<ActionResult<IList<TodoListDto>>> GetTodoLists()
         {
-            return Ok(await _context.TodoList.ToListAsync());
+            var todoLists = await _context.TodoList
+                .Select(tl => new TodoListDto
+                {
+                    Id = tl.Id,
+                    Name = tl.Name,
+                    IncompleteItemCount = tl.TodoItems.Count(ti => !ti.Completed),
+                })
+                .ToListAsync();
+
+            return Ok(todoLists);
         }
 
         // GET: api/todolists/5
