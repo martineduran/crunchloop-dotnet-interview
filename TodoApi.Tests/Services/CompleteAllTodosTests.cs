@@ -1,6 +1,6 @@
 using TodoApi.Services;
 
-namespace TodoApi.Tests.Controllers;
+namespace TodoApi.Tests.Services;
 
 public class CompleteAllTodosTests
 {
