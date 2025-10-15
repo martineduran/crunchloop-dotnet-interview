@@ -4,6 +4,7 @@ using TodoApi.Controllers;
 using TodoApi.Data;
 using TodoApi.Dtos;
 using TodoApi.Models;
+using TodoApi.Services;
 
 namespace TodoApi.Tests.Controllers;
 
@@ -19,9 +20,14 @@ public class TodoListsControllerTests
 
     private void PopulateDatabaseContext(TodoContext context)
     {
-        context.TodoList.Add(new TodoList { Id = 1, Name = "Task 1" });
-        context.TodoList.Add(new TodoList { Id = 2, Name = "Task 2" });
+        context.TodoList.Add(new TodoList { Id = 1, Name = "Task 1", TodoItems = [] });
+        context.TodoList.Add(new TodoList { Id = 2, Name = "Task 2", TodoItems = [] });
         context.SaveChanges();
+    }
+
+    private IBackgroundJobQueue CreateMockJobQueue()
+    {
+        return new BackgroundJobQueue();
     }
 
     [Fact]
@@ -31,7 +37,7 @@ public class TodoListsControllerTests
         {
             PopulateDatabaseContext(context);
 
-            var controller = new TodoListsController(context);
+            var controller = new TodoListsController(context, CreateMockJobQueue());
 
             var result = await controller.GetTodoLists();
 
@@ -47,7 +53,7 @@ public class TodoListsControllerTests
         {
             PopulateDatabaseContext(context);
 
-            var controller = new TodoListsController(context);
+            var controller = new TodoListsController(context, CreateMockJobQueue());
 
             var result = await controller.GetTodoList(1);
 
@@ -63,7 +69,7 @@ public class TodoListsControllerTests
         {
             PopulateDatabaseContext(context);
 
-            var controller = new TodoListsController(context);
+            var controller = new TodoListsController(context, CreateMockJobQueue());
 
             var result = await controller.PutTodoList(
                 3,
@@ -81,7 +87,7 @@ public class TodoListsControllerTests
         {
             PopulateDatabaseContext(context);
 
-            var controller = new TodoListsController(context);
+            var controller = new TodoListsController(context, CreateMockJobQueue());
 
             var todoList = await context.TodoList.Where(x => x.Id == 2).FirstAsync();
             var result = await controller.PutTodoList(
@@ -100,7 +106,7 @@ public class TodoListsControllerTests
         {
             PopulateDatabaseContext(context);
 
-            var controller = new TodoListsController(context);
+            var controller = new TodoListsController(context, CreateMockJobQueue());
 
             var result = await controller.PostTodoList(new CreateTodoList { Name = "Task 3" });
 
@@ -116,7 +122,7 @@ public class TodoListsControllerTests
         {
             PopulateDatabaseContext(context);
 
-            var controller = new TodoListsController(context);
+            var controller = new TodoListsController(context, CreateMockJobQueue());
 
             var result = await controller.DeleteTodoList(2);
 

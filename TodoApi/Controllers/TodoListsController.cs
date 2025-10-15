@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using TodoApi.Data;
 using TodoApi.Dtos;
 using TodoApi.Models;
+using TodoApi.Services;
 
 namespace TodoApi.Controllers
 {
@@ -11,10 +12,12 @@ namespace TodoApi.Controllers
     public class TodoListsController : ControllerBase
     {
         private readonly TodoContext _context;
+        private readonly IBackgroundJobQueue _jobQueue;
 
-        public TodoListsController(TodoContext context)
+        public TodoListsController(TodoContext context, IBackgroundJobQueue jobQueue)
         {
             _context = context;
+            _jobQueue = jobQueue;
         }
 
         // GET: api/todolists
@@ -83,6 +86,24 @@ namespace TodoApi.Controllers
             await _context.SaveChangesAsync();
 
             return NoContent();
+        }
+
+        // POST: api/todolists/5/complete-all
+        [HttpPost("{id:long}/complete-all")]
+        public async Task<ActionResult<CompleteAllTodosResult>> CompleteAllTodos(long id)
+        {
+            var todoList = await _context.TodoList.FindAsync(id);
+            if (todoList == null)
+            {
+                return NotFound();
+            }
+
+            var jobId = Guid.NewGuid().ToString();
+            var job = new CompleteAllTodosJob { JobId = jobId, TodoListId = id };
+
+            _jobQueue.QueueJob(job);
+
+            return Accepted(new CompleteAllTodosResult(jobId));
         }
 
         private bool TodoListExists(long id)

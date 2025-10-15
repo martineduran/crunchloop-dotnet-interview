@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using TodoApi.Data;
+using TodoApi.Hubs;
 using TodoApi.Middleware;
+using TodoApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 builder
@@ -9,6 +11,13 @@ builder
     )
     .AddEndpointsApiExplorer()
     .AddControllers();
+
+// SignalR
+builder.Services.AddSignalR();
+
+// Background job services
+builder.Services.AddSingleton<IBackgroundJobQueue, BackgroundJobQueue>();
+builder.Services.AddHostedService<BackgroundJobProcessor>();
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
@@ -19,4 +28,5 @@ app.UseMiddleware<GlobalErrorHandlingMiddleware>();
 
 app.UseAuthorization();
 app.MapControllers();
+app.MapHub<TodoProgressHub>("/hubs/todo-progress");
 app.Run();

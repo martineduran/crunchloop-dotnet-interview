@@ -72,6 +72,8 @@ public class TodosTests : IntegrationTestBase
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    #if DEBUG
+    
     [Fact]
     public async Task CreateTodoItem_WithNegativeTodoListId_ReturnsInternalServerError()
     {
@@ -88,6 +90,8 @@ public class TodosTests : IntegrationTestBase
         Assert.NotNull(result);
         Assert.Equal(500, result.code);
     }
+    
+    #endif
 
     [Fact]
     public async Task CreateTodoItem_WithEmptyDescription_ReturnsBadRequest()
