@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
+using TodoApi.Configuration;
 using TodoApi.Data;
 using TodoApi.Hubs;
 using TodoApi.Middleware;
 using TodoApi.Services;
+using TodoApi.Services.Sync;
 
 var builder = WebApplication.CreateBuilder(args);
 builder
@@ -30,6 +32,13 @@ builder.Services.AddCors(options =>
 // Background job services
 builder.Services.AddSingleton<IBackgroundJobQueue, BackgroundJobQueue>();
 builder.Services.AddHostedService<BackgroundJobProcessor>();
+
+// Sync services
+builder.Services.Configure<ExternalTodoApiConfiguration>(
+    builder.Configuration.GetSection("ExternalTodoApi")
+);
+builder.Services.AddHttpClient<IExternalTodoApiClient, ExternalTodoApiClient>();
+builder.Services.AddScoped<ISyncService, SyncService>();
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();

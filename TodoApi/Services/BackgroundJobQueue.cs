@@ -26,7 +26,7 @@ public class BackgroundJobQueue : IBackgroundJobQueue
         {
             JobId = job.JobId,
             State = JobState.Queued,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
         };
     }
 
@@ -37,7 +37,7 @@ public class BackgroundJobQueue : IBackgroundJobQueue
 
     public JobStatus? GetJobStatus(string jobId)
     {
-        return _jobStatuses.TryGetValue(jobId, out var status) ? status : null;
+        return _jobStatuses.GetValueOrDefault(jobId);
     }
 
     public void UpdateJobStatus(string jobId, JobStatus status)
