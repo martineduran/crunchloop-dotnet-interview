@@ -8,14 +8,14 @@ using TodoApi.Services.Sync;
 
 namespace TodoApi.Tests.Services;
 
-public class SyncServiceTests : IDisposable
+public class SyncServicePullTests : IDisposable
 {
     private readonly TodoContext _context;
     private readonly Mock<IExternalTodoApiClient> _mockExternalClient;
-    private readonly Mock<ILogger<SyncService>> _mockLogger;
-    private readonly SyncService _syncService;
+    private readonly Mock<ILogger<SyncServicePull>> _mockLogger;
+    private readonly SyncServicePull _syncServicePull;
 
-    public SyncServiceTests()
+    public SyncServicePullTests()
     {
         // Setup in-memory database
         var options = new DbContextOptionsBuilder<TodoContext>()
@@ -24,9 +24,9 @@ public class SyncServiceTests : IDisposable
 
         _context = new TodoContext(options);
         _mockExternalClient = new Mock<IExternalTodoApiClient>();
-        _mockLogger = new Mock<ILogger<SyncService>>();
+        _mockLogger = new Mock<ILogger<SyncServicePull>>();
 
-        _syncService = new SyncService(_mockExternalClient.Object, _context, _mockLogger.Object);
+        _syncServicePull = new SyncServicePull(_mockExternalClient.Object, _context, _mockLogger.Object);
     }
 
     public void Dispose()
@@ -57,7 +57,7 @@ public class SyncServiceTests : IDisposable
             .ReturnsAsync(remoteLists);
 
         // Act
-        var result = await _syncService.SyncFromRemoteAsync();
+        var result = await _syncServicePull.SyncFromRemoteAsync();
 
         // Assert
         Assert.Equal(1, result.ListsCreated);
@@ -109,7 +109,7 @@ public class SyncServiceTests : IDisposable
             .ReturnsAsync(remoteLists);
 
         // Act
-        var result = await _syncService.SyncFromRemoteAsync();
+        var result = await _syncServicePull.SyncFromRemoteAsync();
 
         // Assert
         Assert.Equal(0, result.ListsCreated);
@@ -159,7 +159,7 @@ public class SyncServiceTests : IDisposable
             .ReturnsAsync(remoteLists);
 
         // Act
-        var result = await _syncService.SyncFromRemoteAsync();
+        var result = await _syncServicePull.SyncFromRemoteAsync();
 
         // Assert
         Assert.Equal(0, result.ListsCreated);
@@ -218,7 +218,7 @@ public class SyncServiceTests : IDisposable
             .ReturnsAsync(remoteLists);
 
         // Act
-        var result = await _syncService.SyncFromRemoteAsync();
+        var result = await _syncServicePull.SyncFromRemoteAsync();
 
         // Assert
         Assert.Equal(1, result.ItemsCreated);
@@ -265,7 +265,7 @@ public class SyncServiceTests : IDisposable
             .ReturnsAsync(remoteLists);
 
         // Act
-        var result = await _syncService.SyncFromRemoteAsync();
+        var result = await _syncServicePull.SyncFromRemoteAsync();
 
         // Assert
         Assert.Equal(0, result.ListsCreated);
@@ -311,7 +311,7 @@ public class SyncServiceTests : IDisposable
             .ReturnsAsync(remoteLists);
 
         // Act
-        var result = await _syncService.SyncFromRemoteAsync();
+        var result = await _syncServicePull.SyncFromRemoteAsync();
 
         // Assert
         Assert.Equal(0, result.ListsCreated);

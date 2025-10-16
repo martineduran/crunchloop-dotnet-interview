@@ -1,6 +1,6 @@
 namespace TodoApi.Dtos.Sync;
 
-public class SyncResultDto
+public record SyncResultDto
 {
     public int ListsCreated { get; set; }
     public int ListsUpdated { get; set; }

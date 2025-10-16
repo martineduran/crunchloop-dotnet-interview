@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace TodoApi.Dtos.External;
 
-public class ExternalTodoListDto
+public record ExternalTodoListDto
 {
     [JsonPropertyName("id")]
     public string? Id { get; set; }

@@ -21,9 +21,7 @@ public class SyncController : ControllerBase
     /// Manually trigger sync from remote API (pull operation)
     /// </summary>
     [HttpPost("pull")]
-    public async Task<ActionResult<SyncResultDto>> SyncFromRemote(
-        CancellationToken cancellationToken
-    )
+    public async Task<ActionResult<SyncResultDto>> SyncFromRemote(CancellationToken cancellationToken)
     {
         try
         {
@@ -31,14 +29,9 @@ public class SyncController : ControllerBase
 
             var result = await _syncService.SyncFromRemoteAsync(cancellationToken);
 
-            if (result.Success)
-            {
-                return Ok(result);
-            }
-            else
-            {
-                return StatusCode(500, result);
-            }
+            return result.Success
+                ? Ok(result)
+                : StatusCode(500, result);
         }
         catch (Exception ex)
         {
@@ -55,13 +48,73 @@ public class SyncController : ControllerBase
     }
 
     /// <summary>
+    /// Manually trigger sync to remote API (push operation)
+    /// </summary>
+    [HttpPost("push")]
+    public async Task<ActionResult<SyncResultDto>> SyncToRemote(
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            _logger.LogInformation("Manual sync to remote triggered via API");
+
+            var result = await _syncService.SyncToRemoteAsync(cancellationToken);
+
+            return result.Success
+                ? Ok(result)
+                : StatusCode(500, result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during manual sync to remote");
+            return StatusCode(
+                500,
+                new SyncResultDto
+                {
+                    Errors = [$"Sync failed: {ex.Message}"],
+                    SyncCompletedAt = DateTime.UtcNow,
+                }
+            );
+        }
+    }
+
+    /// <summary>
+    /// Manually trigger full bidirectional sync (pull then push)
+    /// </summary>
+    [HttpPost("full")]
+    public async Task<ActionResult<SyncResultDto>> FullSync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _logger.LogInformation("Manual full bidirectional sync triggered via API");
+
+            var result = await _syncService.FullSyncAsync(cancellationToken);
+
+            return result.Success
+                ? Ok(result)
+                : StatusCode(500, result);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during manual full sync");
+            return StatusCode(
+                500,
+                new SyncResultDto
+                {
+                    Errors = [$"Full sync failed: {ex.Message}"],
+                    SyncCompletedAt = DateTime.UtcNow,
+                }
+            );
+        }
+    }
+
+    /// <summary>
     /// Get sync status information
     /// </summary>
     [HttpGet("status")]
     public IActionResult GetSyncStatus()
     {
-        // This is a placeholder for future implementation
-        // Could track last sync time, next scheduled sync, etc.
         return Ok(
             new
             {

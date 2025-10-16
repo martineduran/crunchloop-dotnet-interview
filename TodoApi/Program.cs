@@ -38,7 +38,7 @@ builder.Services.Configure<ExternalTodoApiConfiguration>(
     builder.Configuration.GetSection("ExternalTodoApi")
 );
 builder.Services.AddHttpClient<IExternalTodoApiClient, ExternalTodoApiClient>();
-builder.Services.AddScoped<ISyncService, SyncService>();
+builder.Services.AddScoped<ISyncService, SyncServicePull>();
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();

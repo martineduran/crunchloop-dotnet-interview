@@ -2,11 +2,8 @@ using System.Text.Json.Serialization;
 
 namespace TodoApi.Dtos.External;
 
-public record ExternalTodoItemDto
+public record CreateTodoItemRequestDto
 {
-    [JsonPropertyName("id")]
-    public string? Id { get; set; }
-
     [JsonPropertyName("source_id")]
     public string? SourceId { get; set; }
 
@@ -15,10 +12,4 @@ public record ExternalTodoItemDto
 
     [JsonPropertyName("completed")]
     public bool Completed { get; set; }
-
-    [JsonPropertyName("created_at")]
-    public DateTime CreatedAt { get; set; }
-
-    [JsonPropertyName("updated_at")]
-    public DateTime UpdatedAt { get; set; }
 }
