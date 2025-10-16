@@ -383,4 +383,206 @@ public class SyncServicePushTests : IDisposable
             Times.Once
         );
     }
+
+    [Fact]
+    public async Task SyncToRemoteAsync_DeletesTodoListOnRemote_WhenDeletedLocally()
+    {
+        // Arrange - Create a tombstone for a deleted list
+        var tombstone = new DeletedEntity
+        {
+            RemoteId = "remote-list-1",
+            EntityType = "TodoList",
+            DeletedAt = DateTime.UtcNow
+        };
+
+        _context.DeletedEntities.Add(tombstone);
+        await _context.SaveChangesAsync();
+
+        _mockExternalClient
+            .Setup(x => x.DeleteTodoListAsync("remote-list-1", It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var result = await _syncService.SyncToRemoteAsync();
+
+        // Assert
+        Assert.Equal(1, result.ListsDeleted);
+        Assert.Equal(0, result.ItemsDeleted);
+        Assert.Empty(result.Errors);
+
+        // Verify tombstone was cleaned up
+        var remainingTombstones = await _context.DeletedEntities.ToListAsync();
+        Assert.Empty(remainingTombstones);
+
+        // Verify DELETE was called
+        _mockExternalClient.Verify(
+            x => x.DeleteTodoListAsync("remote-list-1", It.IsAny<CancellationToken>()),
+            Times.Once
+        );
+    }
+
+    [Fact]
+    public async Task SyncToRemoteAsync_DeletesTodoItemOnRemote_WhenDeletedLocally()
+    {
+        // Arrange - Create a tombstone for a deleted item
+        var tombstone = new DeletedEntity
+        {
+            RemoteId = "remote-item-1",
+            EntityType = "TodoItem",
+            DeletedAt = DateTime.UtcNow,
+            ParentRemoteId = "remote-list-1"
+        };
+
+        _context.DeletedEntities.Add(tombstone);
+        await _context.SaveChangesAsync();
+
+        _mockExternalClient
+            .Setup(x => x.DeleteTodoItemAsync("remote-list-1", "remote-item-1", It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var result = await _syncService.SyncToRemoteAsync();
+
+        // Assert
+        Assert.Equal(0, result.ListsDeleted);
+        Assert.Equal(1, result.ItemsDeleted);
+        Assert.Empty(result.Errors);
+
+        // Verify tombstone was cleaned up
+        var remainingTombstones = await _context.DeletedEntities.ToListAsync();
+        Assert.Empty(remainingTombstones);
+
+        // Verify DELETE was called
+        _mockExternalClient.Verify(
+            x => x.DeleteTodoItemAsync("remote-list-1", "remote-item-1", It.IsAny<CancellationToken>()),
+            Times.Once
+        );
+    }
+
+    [Fact]
+    public async Task SyncToRemoteAsync_HandlesAlreadyDeletedEntity_WhenRemoteReturns404()
+    {
+        // Arrange - Create tombstone for entity already deleted remotely
+        var tombstone = new DeletedEntity
+        {
+            RemoteId = "remote-list-1",
+            EntityType = "TodoList",
+            DeletedAt = DateTime.UtcNow
+        };
+
+        _context.DeletedEntities.Add(tombstone);
+        await _context.SaveChangesAsync();
+
+        // Mock 404 response
+        _mockExternalClient
+            .Setup(x => x.DeleteTodoListAsync("remote-list-1", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Not Found", null, System.Net.HttpStatusCode.NotFound));
+
+        // Act
+        var result = await _syncService.SyncToRemoteAsync();
+
+        // Assert - Should handle 404 gracefully
+        Assert.Equal(1, result.ListsDeleted); // Count as success
+        Assert.Empty(result.Errors); // No errors
+
+        // Verify tombstone was cleaned up despite 404
+        var remainingTombstones = await _context.DeletedEntities.ToListAsync();
+        Assert.Empty(remainingTombstones);
+    }
+
+    [Fact]
+    public async Task SyncToRemoteAsync_CleansTombstones_AfterSuccessfulDeletion()
+    {
+        // Arrange - Create multiple tombstones
+        var listTombstone = new DeletedEntity
+        {
+            RemoteId = "remote-list-1",
+            EntityType = "TodoList",
+            DeletedAt = DateTime.UtcNow
+        };
+
+        var itemTombstone = new DeletedEntity
+        {
+            RemoteId = "remote-item-1",
+            EntityType = "TodoItem",
+            DeletedAt = DateTime.UtcNow,
+            ParentRemoteId = "remote-list-2"
+        };
+
+        _context.DeletedEntities.AddRange(listTombstone, itemTombstone);
+        await _context.SaveChangesAsync();
+
+        _mockExternalClient
+            .Setup(x => x.DeleteTodoListAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _mockExternalClient
+            .Setup(x => x.DeleteTodoItemAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var result = await _syncService.SyncToRemoteAsync();
+
+        // Assert
+        Assert.Equal(1, result.ListsDeleted);
+        Assert.Equal(1, result.ItemsDeleted);
+        Assert.Empty(result.Errors);
+
+        // Verify all tombstones were cleaned up
+        var remainingTombstones = await _context.DeletedEntities.ToListAsync();
+        Assert.Empty(remainingTombstones);
+    }
+
+    [Fact]
+    public async Task SyncToRemoteAsync_DoesNotCreateTombstone_WhenEntityNeverSynced()
+    {
+        // Arrange - Create a local-only list (no RemoteId)
+        var localOnlyList = new TodoList
+        {
+            Name = "Local Only List",
+            RemoteId = null, // Never synced
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            TodoItems = []
+        };
+
+        _context.TodoList.Add(localOnlyList);
+        await _context.SaveChangesAsync();
+
+        // Act - Simulate deletion through controller logic
+        // (Controller should not create tombstone for entity without RemoteId)
+        var listToDelete = await _context.TodoList.Include(l => l.TodoItems).FirstAsync();
+
+        // Don't create tombstone since RemoteId is null
+        if (!string.IsNullOrEmpty(listToDelete.RemoteId))
+        {
+            var tombstone = new DeletedEntity
+            {
+                RemoteId = listToDelete.RemoteId,
+                EntityType = "TodoList",
+                DeletedAt = DateTime.UtcNow
+            };
+            _context.DeletedEntities.Add(tombstone);
+        }
+
+        _context.TodoList.Remove(listToDelete);
+        await _context.SaveChangesAsync();
+
+        // Now run sync
+        var result = await _syncService.SyncToRemoteAsync();
+
+        // Assert - No deletions should occur
+        Assert.Equal(0, result.ListsDeleted);
+        Assert.Equal(0, result.ItemsDeleted);
+
+        // Verify no tombstones exist
+        var tombstones = await _context.DeletedEntities.ToListAsync();
+        Assert.Empty(tombstones);
+
+        // Verify DELETE was never called
+        _mockExternalClient.Verify(
+            x => x.DeleteTodoListAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never
+        );
+    }
 }

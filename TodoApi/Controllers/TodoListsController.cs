@@ -85,10 +85,41 @@ namespace TodoApi.Controllers
         [HttpDelete("{id:long}")]
         public async Task<ActionResult> DeleteTodoList(long id)
         {
-            var todoList = await _context.TodoList.FindAsync(id);
+            var todoList = await _context.TodoList
+                .Include(tl => tl.TodoItems)
+                .FirstOrDefaultAsync(tl => tl.Id == id);
+
             if (todoList == null)
             {
                 return NotFound();
+            }
+
+            // Create tombstone if entity was synced to remote
+            if (!string.IsNullOrEmpty(todoList.RemoteId))
+            {
+                var tombstone = new DeletedEntity
+                {
+                    RemoteId = todoList.RemoteId,
+                    EntityType = "TodoList",
+                    DeletedAt = DateTime.UtcNow,
+                };
+                _context.DeletedEntities.Add(tombstone);
+
+                // Create tombstones for all items in the list
+                foreach (var item in todoList.TodoItems)
+                {
+                    if (!string.IsNullOrEmpty(item.RemoteId))
+                    {
+                        var itemTombstone = new DeletedEntity
+                        {
+                            RemoteId = item.RemoteId,
+                            EntityType = "TodoItem",
+                            DeletedAt = DateTime.UtcNow,
+                            ParentRemoteId = todoList.RemoteId,
+                        };
+                        _context.DeletedEntities.Add(itemTombstone);
+                    }
+                }
             }
 
             _context.TodoList.Remove(todoList);

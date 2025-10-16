@@ -349,15 +349,20 @@ public class SyncService : ISyncService
                 }
             }
 
+            // Phase 4: Delete entities that were removed locally
+            await PushDeletionsAsync(result, cancellationToken);
+
             _logger.LogInformation(
                 "Sync to remote completed. "
-                    + "Lists: {ListsCreated} created, {ListsUpdated} updated. "
-                    + "Items: {ItemsCreated} created, {ItemsUpdated} updated. "
+                    + "Lists: {ListsCreated} created, {ListsUpdated} updated, {ListsDeleted} deleted. "
+                    + "Items: {ItemsCreated} created, {ItemsUpdated} updated, {ItemsDeleted} deleted. "
                     + "Errors: {ErrorCount}",
                 result.ListsCreated,
                 result.ListsUpdated,
+                result.ListsDeleted,
                 result.ItemsCreated,
                 result.ItemsUpdated,
+                result.ItemsDeleted,
                 result.Errors.Count
             );
         }
@@ -392,9 +397,11 @@ public class SyncService : ISyncService
             combinedResult.ListsCreated = pullResult.ListsCreated + pushResult.ListsCreated;
             combinedResult.ListsUpdated = pullResult.ListsUpdated + pushResult.ListsUpdated;
             combinedResult.ListsSkipped = pullResult.ListsSkipped;
+            combinedResult.ListsDeleted = pullResult.ListsDeleted + pushResult.ListsDeleted;
             combinedResult.ItemsCreated = pullResult.ItemsCreated + pushResult.ItemsCreated;
             combinedResult.ItemsUpdated = pullResult.ItemsUpdated + pushResult.ItemsUpdated;
             combinedResult.ItemsSkipped = pullResult.ItemsSkipped;
+            combinedResult.ItemsDeleted = pullResult.ItemsDeleted + pushResult.ItemsDeleted;
             combinedResult.Errors.AddRange(pullResult.Errors);
             combinedResult.Errors.AddRange(pushResult.Errors);
             combinedResult.SyncCompletedAt = DateTime.UtcNow;
@@ -549,6 +556,125 @@ public class SyncService : ISyncService
 
         _logger.LogInformation("Updated TodoItem on remote: {RemoteId}", localItem.RemoteId);
         result.ItemsUpdated++;
+    }
+    
+    private async Task PushDeletionsAsync(
+        SyncResultDto result,
+        CancellationToken cancellationToken
+    )
+    {
+        // Get all pending deletions
+        var pendingDeletions = await _context.DeletedEntities.ToListAsync(cancellationToken);
+
+        if (!pendingDeletions.Any())
+        {
+            return;
+        }
+
+        _logger.LogInformation("Processing {Count} pending deletions", pendingDeletions.Count);
+
+        // Delete TodoItems first
+        var deletedItems = pendingDeletions
+            .Where(d => d.EntityType == "TodoItem")
+            .ToList();
+        foreach (var deleted in deletedItems)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(deleted.ParentRemoteId))
+                {
+                    _logger.LogWarning(
+                        "Skipping TodoItem deletion - missing ParentRemoteId: {RemoteId}",
+                        deleted.RemoteId
+                    );
+                    continue;
+                }
+
+                _logger.LogInformation(
+                    "Deleting TodoItem on remote: {RemoteId} (Parent: {ParentRemoteId})",
+                    deleted.RemoteId,
+                    deleted.ParentRemoteId
+                );
+
+                await _externalApiClient.DeleteTodoItemAsync(
+                    deleted.ParentRemoteId,
+                    deleted.RemoteId,
+                    cancellationToken
+                );
+
+                // Clean up tombstone after successful deletion
+                _context.DeletedEntities.Remove(deleted);
+                await _context.SaveChangesAsync(cancellationToken);
+
+                result.ItemsDeleted++;
+                _logger.LogInformation("Deleted TodoItem on remote: {RemoteId}", deleted.RemoteId);
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Already deleted remotely, just clean up tombstone
+                _logger.LogInformation(
+                    "TodoItem already deleted remotely, cleaning up tombstone: {RemoteId}",
+                    deleted.RemoteId
+                );
+                _context.DeletedEntities.Remove(deleted);
+                await _context.SaveChangesAsync(cancellationToken);
+                result.ItemsDeleted++;
+            }
+            catch (Exception ex)
+            {
+                var errorMsg = $"Error deleting TodoItem {deleted.RemoteId} on remote: {ex.Message}";
+                _logger.LogError(ex, errorMsg);
+                result.Errors.Add(errorMsg);
+            }
+        }
+
+        // Delete TodoLists after items
+        var deletedLists = pendingDeletions.Where(d => d.EntityType == "TodoList").ToList();
+        foreach (var deleted in deletedLists)
+        {
+            try
+            {
+                _logger.LogInformation(
+                    "Deleting TodoList on remote: {RemoteId}",
+                    deleted.RemoteId
+                );
+
+                await _externalApiClient.DeleteTodoListAsync(
+                    deleted.RemoteId,
+                    cancellationToken
+                );
+
+                // Clean up tombstone after successful deletion
+                _context.DeletedEntities.Remove(deleted);
+                await _context.SaveChangesAsync(cancellationToken);
+
+                result.ListsDeleted++;
+                _logger.LogInformation("Deleted TodoList on remote: {RemoteId}", deleted.RemoteId);
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // Already deleted remotely, just clean up tombstone
+                _logger.LogInformation(
+                    "TodoList already deleted remotely, cleaning up tombstone: {RemoteId}",
+                    deleted.RemoteId
+                );
+                _context.DeletedEntities.Remove(deleted);
+                await _context.SaveChangesAsync(cancellationToken);
+                result.ListsDeleted++;
+            }
+            catch (Exception ex)
+            {
+                var errorMsg = $"Error deleting TodoList {deleted.RemoteId} on remote: {ex.Message}";
+                _logger.LogError(ex, errorMsg);
+                result.Errors.Add(errorMsg);
+            }
+        }
+
+        _logger.LogInformation(
+            "Completed push deletions. Lists: {ListsDeleted}, Items: {ItemsDeleted}",
+            result.ListsDeleted,
+            result.ItemsDeleted
+        );
     }
 
     private async Task DetectAndDeleteRemovedEntitiesAsync(

@@ -10,6 +10,7 @@ public class TodoContext : DbContext
 
     public DbSet<TodoList> TodoList { get; set; } = default!;
     public DbSet<TodoItem> TodoItems { get; set; } = default!;
+    public DbSet<DeletedEntity> DeletedEntities { get; set; } = default!;
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {

@@ -120,6 +120,19 @@ public class TodosController : ControllerBase
             return NotFound();
         }
 
+        // Create tombstone if entity was synced to remote
+        if (!string.IsNullOrEmpty(todoItem.RemoteId))
+        {
+            var tombstone = new DeletedEntity
+            {
+                RemoteId = todoItem.RemoteId,
+                EntityType = "TodoItem",
+                DeletedAt = DateTime.UtcNow,
+                ParentRemoteId = todoList.RemoteId,
+            };
+            _context.DeletedEntities.Add(tombstone);
+        }
+        
         todoList.TodoItems.Remove(todoItem);
 
         try
