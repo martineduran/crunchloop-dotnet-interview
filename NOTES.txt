@@ -1,0 +1,595 @@
+===================================================================================
+1. HIGH-LEVEL OVERVIEW
+===================================================================================
+
+This implementation establishes a complete bidirectional synchronization mechanism
+between the local Todo API and an external API. The solution enables seamless data
+flow in both directions while maintaining data consistency, handling conflicts, and
+ensuring reliability.
+
+The architecture follows a layered approach:
+- External API Client Layer: Handles HTTP communication with retry logic
+- Sync Service Layer: Implements business logic for matching, merging, and pushing
+- Controller Layer: Provides manual trigger endpoints for sync operations
+- Data Layer: Extended with sync metadata to track synchronization state
+
+Key Capabilities:
+- Pull Operation: Sync changes from remote API to local database
+- Push Operation: Sync changes from local database to remote API
+- Deletion Sync: Bidirectional - pull detects remote deletions, push syncs local deletions
+- Bidirectional Sync: Combined pull-then-push for full synchronization
+- Conflict Resolution: Last-write-wins based on timestamps
+- Resilience: Retry mechanisms, partial failure handling, comprehensive logging
+
+===================================================================================
+2. KEY DESIGN DECISIONS
+===================================================================================
+
+2.1 Entity Matching Strategy
+-------------------------------------------
+To handle the merge requirement when both systems have data, we implemented a
+three-tier matching strategy:
+
+Priority 1: RemoteId
+  - Direct match with the external API's ID
+  - Most reliable when entities have been synced before
+  - Established after first successful sync
+
+Priority 2: SourceId
+  - Matches entities created in the same source system
+  - Allows tracking across different API instances
+  - Enables proper bidirectional sync without duplicates
+
+Priority 3: Name/Description (Case-insensitive)
+  - Fuzzy matching for initial sync when no IDs exist
+  - Handles user-created entities in both systems independently
+  - Enables "merge both" scenario as specified
+
+This strategy ensures we don't create duplicates during the first sync while
+maintaining accuracy for subsequent syncs.
+
+2.2 Conflict Resolution: Last-Write-Wins (Timestamp-based)
+----------------------------------------------------------
+Per requirements, we use last-write-wins based on UpdatedAt timestamps:
+
+Pull Operation:
+- If remote.UpdatedAt > local.UpdatedAt → Update local entity
+- If remote.UpdatedAt <= local.UpdatedAt → Skip update, keep local version
+- Always update sync metadata (RemoteId, SourceId, LastSyncedAt) regardless
+
+Push Operation:
+- If local.UpdatedAt > local.LastSyncedAt → Push to remote
+- If local.UpdatedAt <= local.LastSyncedAt → Skip, already synced
+
+Benefits:
++ Simple and predictable behavior
++ No manual intervention required
++ Respects the most recent changes
++ Prevents infinite update loops in bidirectional sync
+
+Tradeoffs:
+- Potential data loss if systems have conflicting edits between syncs
+- Relies on accurate system clocks
+
+2.3 Sync Metadata Fields
+-------------------------
+Added to both TodoList and TodoItem models:
+
+- RemoteId (string?): The ID assigned by the external API
+- SourceId (string?): Identifier of the originating system (local vs remote)
+- CreatedAt (DateTime): Entity creation timestamp
+- UpdatedAt (DateTime): Last modification timestamp
+- LastSyncedAt (DateTime?): Last successful sync timestamp
+
+Why both RemoteId AND SourceId?
+- RemoteId: Tracks the external API's ID for this entity
+- SourceId: Tracks which system originally created it
+- This distinction enables proper bidirectional sync and prevents duplicates
+
+Automatic Timestamp Management:
+- Implemented in TodoContext.SaveChangesAsync()
+- CreatedAt/UpdatedAt set automatically on Add/Modify
+- Only sets timestamps if not explicitly provided (checks for default values)
+
+2.4 Change Detection for Push Operations
+-----------------------------------------
+To efficiently identify local changes that need to be pushed:
+
+New Entities:
+- Condition: RemoteId == null
+- Action: POST to create new entity on remote
+- Result: RemoteId assigned and saved locally
+
+Modified Entities:
+- Condition: RemoteId != null AND UpdatedAt > LastSyncedAt
+- Action: PATCH to update existing entity on remote
+- Result: LastSyncedAt updated to current time
+
+Deleted Entities:
+- Condition: exists on DeletedEntities table
+- Action: DELETE to remove existing entity on remote
+- Result: removed from DeletedEntities table
+
+Unchanged Entities:
+- Condition: UpdatedAt <= LastSyncedAt
+- Action: Skip, no sync needed
+- Result: No API calls, optimal performance
+
+This approach ensures only changed data is transmitted, minimizing API calls.
+
+2.5 Four-Phase Push Strategy
+------------------------------
+Push operations execute in four distinct phases to maintain referential integrity:
+
+Phase 1: Create New TodoLists
+- Identifies lists without RemoteId
+- Creates lists with all nested items in single POST
+- External API returns RemoteIds for both list and items
+- Updates local entities with assigned RemoteIds
+
+Phase 2: Update Modified TodoLists
+- Identifies lists with RemoteId where UpdatedAt > LastSyncedAt
+- Sends PATCH request with updated fields
+- Updates LastSyncedAt on success
+
+Phase 3: Update Modified TodoItems
+- Identifies items with RemoteId where UpdatedAt > LastSyncedAt
+- Sends PATCH request to parent list's item endpoint
+- Updates LastSyncedAt on success
+
+Phase 4: Delete Removed Entities
+- Processes tombstones (deleted entities tracked in DeletedEntities table)
+- Deletes TodoItems first (referential integrity)
+- Deletes TodoLists after items
+- Handles 404 responses gracefully (already deleted remotely)
+- Cleans up tombstones after successful deletion
+
+Why this order?
+- Lists must exist before items can be created/updated
+- Nested creation (Phase 1) reduces API calls
+- Deletions happen last to avoid referencing deleted parents
+- Items deleted before lists (referential integrity)
+- Sequential phases prevent referential integrity violations
+
+2.6 Bidirectional Sync Strategy
+--------------------------------
+Full sync combines pull and push operations in specific order:
+
+Step 1: Pull from Remote (SyncFromRemoteAsync)
+- Fetches latest state from external API
+- Updates local database with remote changes
+- Establishes baseline before pushing local changes
+
+Step 2: Push to Remote (SyncToRemoteAsync)
+- Identifies and pushes local changes
+- Creates new entities and updates modified ones
+- Updates sync metadata on success
+
+Step 3: Combine Results
+- Aggregates metrics from both operations
+- Collects all errors from both phases
+- Returns unified result to caller
+
+Why pull-first?
+- Prevents overwriting remote changes with stale local data
+- Resolves conflicts before pushing
+- Minimizes chance of sync conflicts
+
+2.7 Resilience and Error Handling
+----------------------------------
+Multiple layers of error handling:
+
+HTTP Layer (Polly):
+- Exponential backoff retry policy (3 retries)
+- Base delay: 2 seconds, doubles each retry (2s, 4s, 8s)
+- Handles transient network failures gracefully
+- Logs each retry attempt with status codes
+
+Service Layer:
+- Try-catch around each TodoList and TodoItem operation
+- Partial failures don't abort entire sync
+- Errors collected in SyncResultDto.Errors list
+- Detailed logging at each stage
+
+Controller Layer:
+- Returns 500 status with error details on failure
+- Returns 200 with success metrics on success
+- Includes error context for debugging
+
+Benefits:
++ Sync continues even if individual entities fail
++ Detailed error reporting for debugging
++ Network resilience without manual intervention
+
+2.8 Performance Optimizations
+------------------------------
+To minimize API calls as required:
+
+Pull Operation:
+- Single GET /todolists fetches all lists with nested items (1 call)
+- No N+1 query problem (items included in response)
+- In-memory matching reduces database queries
+
+Push Operation:
+- Creates lists with all items in single POST (1 call per new list)
+- Batches changes by phase (create, then update, then delete)
+- Only syncs entities that have changed (change detection)
+- Change detection via UpdatedAt > LastSyncedAt comparison
+
+In-Memory Processing:
+- Load all local lists with items once
+- Match entities in memory before database operations
+- Reduces database round-trips significantly
+
+Current API Call Count:
+- Pull: 1 call total
+- Push: N calls for N new lists + M calls for M modified entities + P calls for P deleted entities
+- This is optimal given the external API design
+
+2.9 Deletion Sync Strategy (Bidirectional)
+--------------------------------------------
+Bidirectional deletion synchronization using tombstone table for tracking:
+
+PULL DELETIONS (Detection by Absence):
+Detection Algorithm:
+- Build HashSet of remote IDs from API response
+- Query local entities with RemoteId != null (previously synced)
+- Identify local entities whose RemoteId doesn't exist in remote HashSet
+- Delete identified entities from local database
+
+Two-Level Detection:
+1. TodoList Level:
+   - Compare local lists with RemoteId against remote list IDs
+   - Delete entire lists (with cascade to items) when not found in remote
+
+2. TodoItem Level:
+   - For lists that still exist remotely, compare item IDs
+   - Delete individual items when not found in remote list's items
+   - Only checks items in lists still present on remote
+
+PUSH DELETIONS (Tombstone Table):
+Tombstone Tracking:
+- DeletedEntity table tracks entities deleted locally
+- Tombstones created only for entities with RemoteId (previously synced)
+- Stores RemoteId, EntityType, DeletedAt, ParentRemoteId (for items)
+
+Push Deletion Workflow:
+1. Query all pending tombstones from DeletedEntities table
+2. Delete TodoItems first (use ParentRemoteId for API call)
+3. Delete TodoLists after items (referential integrity)
+4. Handle 404 responses gracefully (already deleted remotely)
+5. Clean up tombstones after successful deletion
+
+Tombstone Creation (in Controllers):
+- On DELETE, check if entity has RemoteId
+- If yes, create tombstone before removing entity
+- If no RemoteId, entity was never synced - no tombstone needed
+- For lists, create tombstones for all nested items too
+
+Local-Only Entity Preservation:
+- Only entities with RemoteId are candidates for deletion sync
+- Entities without RemoteId (never synced) are NEVER affected
+- Prevents accidental deletion of local-only work
+
+Error Handling:
+- Try-catch around each entity deletion (both pull and push)
+- Partial failures don't stop deletion detection
+- 404 treated as success - clean up tombstone
+- Other errors collected in SyncResultDto.Errors
+- Detailed logging for each deletion
+
+===================================================================================
+3. RESILIENCE AND ERROR HANDLING DETAILS
+===================================================================================
+
+Failure Modes Handled:
+-----------------------
+1. Network Timeout
+   → Polly retries with exponential backoff
+   → Logs retry attempts with delays
+   → Returns error after max retries exceeded
+
+2. External API Returns 500
+   → Polly treats as retriable error
+   → Retries with backoff
+   → Eventually fails with detailed error message
+
+3. JSON Deserialization Error
+   → Caught in ExternalTodoApiClient
+   → Wrapped in InvalidOperationException with context
+   → Logged with full details
+
+4. Individual Entity Sync Failure (Pull)
+   → Caught per-entity in SyncFromRemoteAsync
+   → Error added to result.Errors list
+   → Sync continues for remaining entities
+
+5. Individual Entity Sync Failure (Push)
+   → Caught per-phase in SyncToRemoteAsync
+   → Error added to result.Errors list
+   → Sync continues to next phase
+
+6. Database Constraint Violation
+   → Caught in SaveChangesAsync
+   → Logged with entity context
+   → Sync continues for other entities
+
+===================================================================================
+4. EDGE CASES HANDLED
+===================================================================================
+
+4.1 Empty Remote Response
+   → Returns SyncResultDto with zero counts
+   → No errors, graceful handling
+   → Does not delete local-only entities (entities without RemoteId)
+
+4.2 Empty Local Database
+   → Push operation returns zero counts
+   → No API calls made, optimal performance
+
+4.3 Deletion Handling (Bidirectional)
+   → Pull: Local entities with RemoteId not found in remote are deleted
+   → Push: Tombstones track locally deleted entities for remote sync
+   → TodoLists deleted with cascade to all child TodoItems
+   → Individual TodoItems can be deleted when list remains
+   → Local-only entities (no RemoteId) are preserved
+   → 404 responses treated as success (already deleted)
+   → Tombstones cleaned up after successful push deletion
+
+4.4 Null/Missing Fields in External API
+   → DTOs use nullable types where appropriate
+   → Fallback values: "Untitled" for lists, "No description" for items
+   → Prevents crashes from incomplete data
+
+4.5 Circular/Recursive Updates (Bidirectional Sync)
+   → Pull-first strategy establishes baseline
+   → Change detection prevents re-syncing unchanged entities
+   → LastSyncedAt prevents infinite loops
+   → UpdatedAt comparison ensures only new changes propagate
+
+4.6 Large Dataset Performance
+   → Current implementation loads all lists into memory
+   → Works well for small to medium datasets
+   → Potential improvement: Pagination support (see Section 8)
+
+4.7 Concurrent Sync Operations
+   → Not currently prevented
+   → SyncService uses scoped lifetime (one per request)
+   → Multiple simultaneous syncs could cause race conditions
+   → Future improvement: Distributed lock mechanism
+
+4.8 Time Zone Differences
+   → All timestamps stored/compared in UTC
+   → Eliminates time zone ambiguity
+
+4.9 Items Without Parent List (Push)
+   → Items must have valid TodoListId
+   → Parent list must have RemoteId to update items
+   → Logged as warning if RemoteId missing
+   → Skips item update to prevent API error
+
+4.10 Failed Creation Blocking Updates
+    → Three-phase approach isolates failures
+    → Phase 2 executes even if Phase 1 has failures
+    → Enables partial progress in push operations
+
+4.11 Deletion Failures
+    → Try-catch per entity deletion
+    → Partial deletion failures don't stop sync
+    → Errors collected and reported in result
+    → Remaining entities continue to be processed
+
+===================================================================================
+5. AREAS FOR IMPROVEMENT (FUTURE ENHANCEMENTS)
+===================================================================================
+
+5.1 Performance Optimizations
+------------------------------
+Current: Load all local entities into memory
+Improvement: Implement pagination in external API
+  - Fetch in batches (e.g., 100 lists at a time)
+  - Process and commit in chunks
+  - Reduces memory footprint for large datasets
+
+Current: SaveChangesAsync called frequently
+Improvement: Batch database operations
+  - Collect changes in memory
+  - Single SaveChangesAsync per batch
+  - Reduces database round-trips
+
+Current: Sequential push operations
+Improvement: Parallel push with dependency tracking
+  - Create lists in parallel (no dependencies)
+  - Update items in parallel within each list
+  - Respect parent-child relationships
+
+5.2 Sync Status Tracking
+-------------------------
+Current: /api/sync/status is a placeholder
+Improvement: Implement sync metadata table
+  - Track last sync time for each operation type
+  - Store sync history with results
+  - Monitor sync health and trends
+  - Enable scheduled sync based on last run
+
+5.3 Scheduled Background Sync
+------------------------------
+Current: Manual trigger only
+Improvement: Background job integration
+  - Use existing BackgroundJobQueue infrastructure
+  - Configurable interval (e.g., every 5 minutes)
+  - Health checks and alerting
+  - Automatic retry on failure
+
+5.4 Concurrency Control
+-----------------------
+Current: No sync operation locking
+Improvement: Distributed lock
+  - Prevent multiple simultaneous syncs
+  - Use database-based or Redis-based locking
+  - Graceful handling of locked state
+  - Lock timeout and automatic release
+
+5.5 Conflict Resolution Strategies
+-----------------------------------
+Current: Last-write-wins only
+Improvement: Configurable strategies
+  - Remote-always-wins
+  - Local-always-wins
+  - Manual merge required (with UI)
+  - Field-level merge (merge non-conflicting fields)
+  - Custom resolution rules per entity type
+
+5.6 Incremental Sync
+--------------------
+Current: Full sync every time
+Improvement: Delta sync
+  - External API supports "since" parameter
+  - Only fetch entities modified after LastSyncedAt
+  - Dramatically reduces payload for large datasets
+  - Significantly improves performance
+
+Suggested External API Enhancement:
+  GET /todolists?updated_since=2025-10-15T12:00:00Z
+
+===================================================================================
+6. ASSUMPTIONS
+===================================================================================
+
+6.1 External API Assumptions
+-----------------------------
+- External API always returns all lists with nested items
+- No pagination required
+- Timestamps are accurate and in UTC
+- No authentication required
+- JSON response follows documented schema
+- External API returns assigned IDs after POST operations
+- PATCH operations return updated entity
+- DELETE operations are idempotent
+
+6.2 Business Logic Assumptions
+-------------------------------
+- Last-write-wins is acceptable conflict resolution
+- No "undelete" requirements
+- TodoItems cannot exist without a parent TodoList
+- Description/Name matching is case-insensitive
+- Exact string match for names
+- Bidirectional sync is acceptable
+
+6.3 Operational Assumptions
+----------------------------
+- Database is always available (no circuit breaker to DB)
+- Single application instance (no distributed sync coordination)
+- No regulatory requirements for data retention/audit logs
+- Manual sync triggers are sufficient (no scheduled requirement)
+- Partial failures are acceptable (don't need transactions)
+- Administrators can trigger manual syncs when needed
+
+===================================================================================
+7. EXTERNAL API IMPROVEMENT SUGGESTIONS
+===================================================================================
+
+To improve sync performance and reliability, consider these API enhancements:
+
+7.1 Pagination Support
+   GET /todolists?limit=100&offset=0
+   → Reduces payload size for large datasets
+   → Enables processing in batches
+
+7.2 Incremental Sync Endpoint
+   GET /todolists?updated_since=2025-10-15T12:00:00Z
+   → Only returns entities modified after timestamp
+   → Dramatically reduces sync time
+   → Most impactful optimization for regular syncs
+
+7.3 Batch Operations
+   POST /todolists/batch
+   → Create/update multiple lists in one request
+   → Reduces number of API calls significantly
+   → Improves push operation performance
+
+7.4 Webhook Notifications
+   POST to configured callback URL when changes occur
+   → Enables event-driven sync
+   → Near real-time synchronization
+   → Eliminates polling and unnecessary syncs
+
+7.5 Transaction Support
+   POST /todolists/batch with all-or-nothing semantics
+   → Ensures consistency across multiple operations
+   → Simplifies error handling
+   → Reduces partial failure scenarios
+
+===================================================================================
+8. RUNNING THE SYNC
+===================================================================================
+
+Configuration:
+--------------
+Edit appsettings.json:
+
+{
+  "ExternalTodoApi": {
+    "BaseUrl": "http://localhost:5000",  // Change to actual external API URL
+    "TimeoutSeconds": 30,
+    "RetryCount": 3,
+    "RetryDelaySeconds": 2
+  }
+}
+
+Available Endpoints:
+--------------------
+
+1. Pull from Remote (Sync FROM external API)
+   POST http://localhost:5001/api/sync/pull
+
+   Response Example:
+   {
+     "listsCreated": 5,
+     "listsUpdated": 3,
+     "listsSkipped": 2,
+     "listsDeleted": 1,
+     "itemsCreated": 25,
+     "itemsUpdated": 10,
+     "itemsSkipped": 15,
+     "itemsDeleted": 3,
+     "errors": [],
+     "syncCompletedAt": "2025-10-16T12:34:56Z",
+     "success": true
+   }
+
+2. Push to Remote (Sync TO external API)
+   POST http://localhost:5001/api/sync/push
+
+   Response Example:
+   {
+     "listsCreated": 2,
+     "listsUpdated": 1,
+     "listsSkipped": 0,
+     "listsDeleted": 1,
+     "itemsCreated": 10,
+     "itemsUpdated": 3,
+     "itemsSkipped": 0,
+     "itemsDeleted": 2,
+     "errors": [],
+     "syncCompletedAt": "2025-10-16T12:35:30Z",
+     "success": true
+   }
+
+3. Full Bidirectional Sync (Pull then Push)
+   POST http://localhost:5001/api/sync/full
+
+   Response Example:
+   {
+     "listsCreated": 7,      // 5 from pull + 2 from push
+     "listsUpdated": 4,      // 3 from pull + 1 from push
+     "listsSkipped": 2,      // from pull only
+     "listsDeleted": 2,      // 1 from pull + 1 from push
+     "itemsCreated": 35,     // 25 from pull + 10 from push
+     "itemsUpdated": 13,     // 10 from pull + 3 from push
+     "itemsSkipped": 15,     // from pull only
+     "itemsDeleted": 5,      // 3 from pull + 2 from push
+     "errors": [],
+     "syncCompletedAt": "2025-10-16T12:36:45Z",
+     "success": true
+   }
