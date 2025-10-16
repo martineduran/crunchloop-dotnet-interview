@@ -12,8 +12,8 @@ public class SyncServicePushTests : IDisposable
 {
     private readonly TodoContext _context;
     private readonly Mock<IExternalTodoApiClient> _mockExternalClient;
-    private readonly Mock<ILogger<SyncServicePull>> _mockLogger;
-    private readonly SyncServicePull _syncServicePull;
+    private readonly Mock<ILogger<SyncService>> _mockLogger;
+    private readonly SyncService _syncService;
 
     public SyncServicePushTests()
     {
@@ -23,9 +23,9 @@ public class SyncServicePushTests : IDisposable
 
         _context = new TodoContext(options);
         _mockExternalClient = new Mock<IExternalTodoApiClient>();
-        _mockLogger = new Mock<ILogger<SyncServicePull>>();
+        _mockLogger = new Mock<ILogger<SyncService>>();
 
-        _syncServicePull = new SyncServicePull(_mockExternalClient.Object, _context, _mockLogger.Object);
+        _syncService = new SyncService(_mockExternalClient.Object, _context, _mockLogger.Object);
     }
 
     public void Dispose()
@@ -63,7 +63,7 @@ public class SyncServicePushTests : IDisposable
             .ReturnsAsync(remoteResponse);
 
         // Act
-        var result = await _syncServicePull.SyncToRemoteAsync();
+        var result = await _syncService.SyncToRemoteAsync();
 
         // Assert
         Assert.Equal(1, result.ListsCreated);
@@ -138,7 +138,7 @@ public class SyncServicePushTests : IDisposable
             .ReturnsAsync(remoteResponse);
 
         // Act
-        var result = await _syncServicePull.SyncToRemoteAsync();
+        var result = await _syncService.SyncToRemoteAsync();
 
         // Assert
         Assert.Equal(1, result.ListsCreated);
@@ -191,7 +191,7 @@ public class SyncServicePushTests : IDisposable
             .ReturnsAsync(remoteResponse);
 
         // Act
-        var result = await _syncServicePull.SyncToRemoteAsync();
+        var result = await _syncService.SyncToRemoteAsync();
 
         // Assert
         Assert.Equal(0, result.ListsCreated);
@@ -261,7 +261,7 @@ public class SyncServicePushTests : IDisposable
             .ReturnsAsync(remoteResponse);
 
         // Act
-        var result = await _syncServicePull.SyncToRemoteAsync();
+        var result = await _syncService.SyncToRemoteAsync();
 
         // Assert
         Assert.Equal(0, result.ItemsCreated);
@@ -300,7 +300,7 @@ public class SyncServicePushTests : IDisposable
         await _context.SaveChangesAsync();
 
         // Act
-        var result = await _syncServicePull.SyncToRemoteAsync();
+        var result = await _syncService.SyncToRemoteAsync();
 
         // Assert
         Assert.Equal(0, result.ListsCreated);
@@ -368,7 +368,7 @@ public class SyncServicePushTests : IDisposable
             .ReturnsAsync(createResponse);
 
         // Act
-        var result = await _syncServicePull.FullSyncAsync();
+        var result = await _syncService.FullSyncAsync();
 
         // Assert
         Assert.Equal(2, result.ListsCreated); // 1 from pull, 1 from push

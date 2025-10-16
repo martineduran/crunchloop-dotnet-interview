@@ -6,16 +6,16 @@ using TodoApi.Models;
 
 namespace TodoApi.Services.Sync;
 
-public class SyncServicePull : ISyncService
+public class SyncService : ISyncService
 {
     private readonly IExternalTodoApiClient _externalApiClient;
     private readonly TodoContext _context;
-    private readonly ILogger<SyncServicePull> _logger;
+    private readonly ILogger<SyncService> _logger;
 
-    public SyncServicePull(
+    public SyncService(
         IExternalTodoApiClient externalApiClient,
         TodoContext context,
-        ILogger<SyncServicePull> logger
+        ILogger<SyncService> logger
     )
     {
         _externalApiClient = externalApiClient;
@@ -54,17 +54,22 @@ public class SyncServicePull : ISyncService
                     result.Errors.Add(errorMsg);
                 }
             }
-            
+
+            // Detect and delete local entities that no longer exist remotely
+            await DetectAndDeleteRemovedEntitiesAsync(remoteLists, localLists, result, cancellationToken);
+
             _logger.LogInformation("Sync from remote completed. " +
-                                   "Lists: {ListsCreated} created, {ListsUpdated} updated, {ListsSkipped} skipped. " +
-                                   "Items: {ItemsCreated} created, {ItemsUpdated} updated, {ItemsSkipped} skipped. " +
+                                   "Lists: {ListsCreated} created, {ListsUpdated} updated, {ListsSkipped} skipped, {ListsDeleted} deleted. " +
+                                   "Items: {ItemsCreated} created, {ItemsUpdated} updated, {ItemsSkipped} skipped, {ItemsDeleted} deleted. " +
                                    "Errors: {ErrorCount}",
                 result.ListsCreated,
                 result.ListsUpdated,
                 result.ListsSkipped,
+                result.ListsDeleted,
                 result.ItemsCreated,
                 result.ItemsUpdated,
                 result.ItemsSkipped,
+                result.ItemsDeleted,
                 result.Errors.Count
             );
         }
@@ -544,5 +549,147 @@ public class SyncServicePull : ISyncService
 
         _logger.LogInformation("Updated TodoItem on remote: {RemoteId}", localItem.RemoteId);
         result.ItemsUpdated++;
+    }
+
+    private async Task DetectAndDeleteRemovedEntitiesAsync(
+        List<ExternalTodoListDto> remoteLists,
+        List<TodoList> localLists,
+        SyncResultDto result,
+        CancellationToken cancellationToken
+    )
+    {
+        // Build set of remote IDs for fast lookup
+        var remoteListIds = remoteLists
+            .Select(rl => rl.Id)
+            .Where(id => id != null)
+            .ToHashSet();
+        var remoteItemIdsByList = remoteLists
+            .Where(rl => rl.Id != null)
+            .ToDictionary(
+                rl => rl.Id!,
+                rl => rl.Items
+                    .Select(ri => ri.Id)
+                    .Where(id => id != null)
+                    .ToHashSet()
+            );
+        
+        // Detect and delete TodoLists that were deleted remotely
+        await DetectAndDeleteRemovedTodoListsAsync(localLists, remoteListIds, result, cancellationToken);
+        
+        // Detect and delete TodoItems that were deleted remotely
+        await DetectAndDeleteRemovedTodoItemsAsync(
+            localLists,
+            remoteListIds,
+            remoteItemIdsByList,
+            result,
+            cancellationToken
+        );
+    }
+    
+    private async Task DetectAndDeleteRemovedTodoListsAsync(
+        List<TodoList> localLists,
+        HashSet<string?> remoteListIds,
+        SyncResultDto result,
+        CancellationToken cancellationToken
+    )
+    {
+        var deletedLists = localLists
+            .Where(ll => !string.IsNullOrEmpty(ll.RemoteId) && !remoteListIds.Contains(ll.RemoteId))
+            .ToList();
+
+        foreach (var deletedList in deletedLists)
+        {
+            try
+            {
+                _logger.LogInformation(
+                    "Deleting local TodoList (no longer exists remotely): {Name} (Id: {Id}, RemoteId: {RemoteId})",
+                    deletedList.Name,
+                    deletedList.Id,
+                    deletedList.RemoteId
+                );
+
+                var itemCount = deletedList.TodoItems.Count;
+
+                // Manually delete items first
+                foreach (var item in deletedList.TodoItems.ToList())
+                {
+                    _context.TodoItems.Remove(item);
+                }
+
+                _context.TodoList.Remove(deletedList);
+                await _context.SaveChangesAsync(cancellationToken);
+
+                result.ListsDeleted++;
+                result.ItemsDeleted += itemCount;
+
+                _logger.LogInformation(
+                    "Deleted TodoList and {ItemCount} items: {Name} (RemoteId: {RemoteId})",
+                    itemCount,
+                    deletedList.Name,
+                    deletedList.RemoteId
+                );
+            }
+            catch (Exception ex)
+            {
+                var errorMsg = $"Error deleting TodoList '{deletedList.Name}' (RemoteId: {deletedList.RemoteId}): {ex.Message}";
+                _logger.LogError(ex, errorMsg);
+                result.Errors.Add(errorMsg);
+            }
+        }
+    }
+    
+    private async Task DetectAndDeleteRemovedTodoItemsAsync(
+        List<TodoList> localLists,
+        HashSet<string?> remoteListIds,
+        Dictionary<string, HashSet<string?>> remoteItemIdsByList,
+        SyncResultDto result,
+        CancellationToken cancellationToken
+    )
+    {
+        var listsStillInRemote = localLists
+            .Where(ll => !string.IsNullOrEmpty(ll.RemoteId) && remoteListIds.Contains(ll.RemoteId))
+            .ToList();
+
+        foreach (var localList in listsStillInRemote)
+        {
+            if (!remoteItemIdsByList.TryGetValue(localList.RemoteId!, out var remoteItemIds))
+            {
+                continue;
+            }
+
+            var deletedItems = localList.TodoItems
+                .Where(li => !string.IsNullOrEmpty(li.RemoteId) && !remoteItemIds.Contains(li.RemoteId))
+                .ToList();
+
+            foreach (var deletedItem in deletedItems)
+            {
+                try
+                {
+                    _logger.LogInformation(
+                        "Deleting local TodoItem (no longer exists remotely): {Description} (Id: {Id}, RemoteId: {RemoteId})",
+                        deletedItem.Description,
+                        deletedItem.Id,
+                        deletedItem.RemoteId
+                    );
+
+                    _context.TodoItems.Remove(deletedItem);
+                    await _context.SaveChangesAsync(cancellationToken);
+
+                    result.ItemsDeleted++;
+
+                    _logger.LogInformation(
+                        "Deleted TodoItem: {Description} (RemoteId: {RemoteId})",
+                        deletedItem.Description,
+                        deletedItem.RemoteId
+                    );
+                }
+                catch (Exception ex)
+                {
+                    var errorMsg = $"Error deleting TodoItem '{deletedItem.Description}' (RemoteId: {deletedItem.RemoteId}): {ex.Message}";
+                    _logger.LogError(ex, errorMsg);
+                    result.Errors.Add(errorMsg);
+                }
+            }
+        }        
     }
 }
